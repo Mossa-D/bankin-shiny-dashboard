@@ -41,7 +41,7 @@ fluidPage(
             
                      
             # Input: Select categories to focus on ----
-            uiOutput(outputId = "categorie")
+            uiOutput(outputId = "categorie_dep")
         ),
                      
         
@@ -73,7 +73,8 @@ fluidPage(
                 # DEPENSES tab ----
                 tabPanel(
                     "DEPENSES",
-                    plotlyOutput(outputId = "show_dep_monthly")
+                    plotlyOutput(outputId = "show_dep_monthly"),
+                    plotlyOutput(outputId = "show_dep_souscat_monthly")
                 )
             )
         )

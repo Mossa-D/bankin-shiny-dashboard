@@ -41,14 +41,14 @@ shinyServer(function(input, output) {
     })
     
     ## Categories
-    output$categorie <- renderUI({
+    output$categorie_dep <- renderUI({
         
         selectInput(
-            inputId = "rdr_categorie",
+            inputId = "render_categorie_dep",
             label = "Selection categories",
-            choices = levels(bankin()$Categorie),
+            choices = categories$dep,
             multiple = TRUE,
-            selected = levels(bankin()$Categorie)
+            selected = categories$dep
         )
     })
     
@@ -81,8 +81,12 @@ shinyServer(function(input, output) {
     })
     
     output$show_dep_monthly <- renderPlotly({
-        req(input$rdr_categorie)
-        Depenses_Breakdown_Monthly_Plot(df, input$rdr_categorie)
+        Depenses_Monthly_Plot(df)
+    })
+    
+    output$show_dep_souscat_monthly <- renderPlotly({
+        req(input$render_categorie_dep)
+        Depenses_Breakdown_Monthly_Plot(df, input$render_categorie_dep)
     })
 
 })

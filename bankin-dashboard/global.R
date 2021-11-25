@@ -4,7 +4,6 @@ library(readxl)
 library(tidyverse)
 library(plotly)
 library(lubridate)
-library(data.table)
 library(DT)
 library(dplyr)
 library(reactlog)
@@ -27,6 +26,7 @@ Preparing_Columns <- function(df) {
     mutate(
       Date = dmy(Date),
       Compte = factor(Compte),
+      Categorie = replace(Categorie, SousCategorie == "Virements internes", "Virements internes"),
       Categorie = factor(Categorie),
       SousCategorie = factor(SousCategorie),
       Type = case_when(
@@ -35,13 +35,32 @@ Preparing_Columns <- function(df) {
         Categorie %in% "Entrées d'argent" ~ "CREDIT",
         TRUE ~ "DEBIT"),
       Montant = if_else(Montant < 0, -Montant, Montant),
-      AnneeMois = substr(Date, 1, 7))
+      AnneeMois = substr(Date, 1, 7),
+      Trimestre = zoo::as.yearqtr(Date, format="%Y-%m-%d"))
   
   return(df)
 }
 
 df <- read_excel("export_banques_2020-01-01_2021-10-30.xls", sheet = 1) %>% 
   Preparing_Columns()
+
+
+
+Categories_Type <- function(df) {
+  # Separe les categorie selon leur types
+  
+  dep = as.character(pull(unique(df[df$Type == "DEBIT", "Categorie"])))
+  rev = as.character(pull(unique(df[df$Type == "CREDIT", "Categorie"])))
+  
+  categories = list("rev" = rev, "dep" = dep)
+  
+  return(categories)
+}
+
+categories <- Categories_Type(df)
+
+categories$dep
+
 
 Monthly_Overview <- function(df) {
   # Monthly group by
@@ -64,7 +83,7 @@ Monthly_Overview <- function(df) {
     )
 }
 
-monthly_summary <- Monthly_Groupby(df)
+monthly_summary <- Monthly_Overview(df)
 
 # VISUALISATIONS ----
 
@@ -96,13 +115,40 @@ Running_Balance_Plot <- function(df_monthly){
 
 # Running_Balance_Plot(monthly_summary)
 
+SousCategorie_Monthly <- function(df) {
+  # Somme mensuelle des montants par sous categorie
+  
+  return(left_join(
+    df %>%  
+      group_by(AnneeMois, SousCategorie) %>% 
+      summarise(TotalMois = sum(Montant)) %>% 
+      ungroup(),
+    df %>% 
+      distinct(SousCategorie, Categorie, Type),
+    by = c("SousCategorie" = "SousCategorie")
+  ))
+}
+
+Categorie_Monthly <- function(df) {
+  # Somme mensuelle des montants par categorie
+  
+  return(
+    left_join(
+      df %>%  
+        group_by(AnneeMois, Categorie) %>% 
+        summarise(TotalMois = sum(Montant)) %>% 
+        ungroup(),
+      df %>% 
+        distinct(Categorie, Type),
+      by = c("Categorie" = "Categorie")
+    ))
+}
+
 Revenus_Breakdown_Plot <- function(df) {
   # Detail des sources de revenus par mois
   
-  p = df %>% 
+  p = SousCategorie_Monthly(df) %>% 
     filter(Type == "CREDIT") %>% 
-    group_by(AnneeMois, SousCategorie) %>% 
-    summarise(TotalMois = sum(Montant)) %>% 
     ggplot() +
     geom_col(aes(x = AnneeMois, y = TotalMois, group = SousCategorie, fill = SousCategorie)) +
     scale_fill_manual(values = c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928')) +
@@ -118,22 +164,12 @@ Revenus_Breakdown_Plot(df)
 Depenses_Breakdown_Monthly_Plot <- function(df, cat_filter) {
   # Detail des depenses par mois
   
-  p = left_join(
-    df %>% 
-      filter(Type == "DEBIT") %>% 
-      group_by(AnneeMois, SousCategorie) %>% 
-      summarise(TotalMois = sum(Montant)) %>% 
-      ungroup(),
-    df %>% 
-      distinct(SousCategorie, Categorie),
-    by = c("SousCategorie" = "SousCategorie")
-  ) %>% 
-    filter(Categorie %in% cat_filter) %>% 
+  p = SousCategorie_Monthly(df) %>% 
+    filter(Type == "DEBIT" & Categorie %in% cat_filter) %>% 
   
     ggplot() +
     geom_col(aes(x = AnneeMois, y = TotalMois, group = SousCategorie, fill = SousCategorie)) +
-    # scale_fill_manual(values = c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928')) +
-    labs(title = "Répartition des revenus", x = "") +
+    labs(title = "Détail des sous-catégories", x = "") +
     guides(fill = "none")
   
   return(ggplotly(p, tooltip = c("y", "fill")))
@@ -143,26 +179,62 @@ Depenses_Breakdown_Monthly_Plot <- function(df, cat_filter) {
 Depenses_Breakdown_Monthly_Plot(df, c("Achats & Shopping", "Logement"))
 
 
+Depenses_Monthly_Plot <- function(df) {
+  # Detail des depenses par mois
+  
+  p = Categorie_Monthly(df) %>% 
+    filter(Type == "DEBIT") %>%
+    
+    ggplot() +
+    geom_col(aes(x = AnneeMois, y = TotalMois, group = Categorie, fill = Categorie), color = "gray") +
+    labs(title = "Répartition des dépenses", x = "", y = "Montant") +
+    guides(fill = "none")
+  
+  return(ggplotly(p, tooltip = c("y", "fill")))
+}
 
+Depenses_Monthly_Plot(df)
 
+Part_Depenses_Annee <- function(df, selected_year) {
+  # Part des dépenses
+  
+  df %>% 
+    group_by(Annee = year(Date), Categorie, Type) %>% 
+    summarise(Montant = sum(Montant)) %>% 
+    filter(Annee == selected_year & Type == "DEBIT") %>%
+    ungroup() %>% 
+    mutate(PartMontant = Montant / sum(Montant)) %>% 
+    
+    ggplot() + 
+    geom_col(aes(x = reorder(Categorie, PartMontant), y = PartMontant, fill = Categorie)) + 
+    coord_flip() +
+    guides(fill = "none") +
+    scale_y_continuous(labels = scales::percent) +
+    labs(x="", title = "Repartition des dépenses", subtitle = paste0("Année ", selected_year))
+  
+}
 
-
-
-# Dépenses totales par catégorie sur l'année en cours
+Part_Depenses_Annee(df, 2020)
 
 df %>% 
-  group_by(Annee = year(Date), Categorie, Type) %>% 
-  summarise(Montant = sum(Montant)) %>% 
-  filter(Annee == 2020 & Type == "DEBIT") %>% 
-  
-  ggplot() + 
-  geom_col(aes(x = reorder(Categorie, -Montant), y = Montant, fill = Categorie)) + 
-  guides(fill = "none") +
-  labs(x="", title = "Repartition des dépenses") + 
-  theme(axis.text.x = element_text(angle = 90))
+  filter(Type == "DEBIT") %>% 
+  group_by(Trimestre, Categorie) %>% 
+  summarise(TotalTrimestre = sum(Montant)) %>% 
+  mutate(Trimestre = as.character(Trimestre),
+         Trimestre = str_replace(Trimestre, " ", "_")) %>% 
+  # pivot_wider(names_from = Trimestre, values_from = TotalTrimestre, values_fill = 0) %>% 
+  ggplot() +
+  geom_col(aes(x = Categorie, y = TotalTrimestre, group = Trimestre, fill = Trimestre), position = position_dodge()) + 
+  coord_flip()
 
 
-# Revenus totaux par catégorie sur l'année en cours
+
+# Dépenses totales par catégorie sur l'année en cours ----
+
+
+
+
+# Revenus totaux par catégorie sur l'année en cours ----
 
 df %>% 
   group_by(Annee = year(Date), SousCategorie, Type) %>% 
@@ -177,23 +249,9 @@ df %>%
   theme(axis.text.x = element_text(angle = 90))
 
 
-# Evolution des niveaux de dépenses / revenus mois par mois
+# Treemap annee en cours
 
-df %>% 
-  group_by(AnneeMois, Categorie, Type) %>% 
-  summarise(Montant = sum(Montant)) %>% 
-  filter(Type == "DEBIT") %>%
-  ggplot() +
-  geom_line(aes(x = AnneeMois, y = Montant, group = Categorie, color = Categorie)) +
-  labs(x="", title = "Evolution des dépenses par catégories") + 
-  theme(axis.text.x = element_text(angle = 90))
+library(treemapify)
+library(ggplotify)
 
-df %>% 
-  group_by(AnneeMois, SousCategorie, Type) %>% 
-  summarise(Montant = sum(Montant)) %>% 
-  filter(Type == "CREDIT") %>%
-  ggplot() +
-  geom_col(aes(x = AnneeMois, y = Montant, group = SousCategorie, fill = SousCategorie)) +
-  scale_fill_brewer(palette = "Set1") +
-  labs(x="", title = "Evolution des revenus par sous-catégories") + 
-  theme(axis.text.x = element_text(angle = 90))
+
